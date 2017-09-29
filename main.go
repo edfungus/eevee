@@ -10,20 +10,26 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	logging "github.com/op/go-logging"
 )
 
 var log = logging.MustGetLogger("eevee")
 
-type opaque struct {
-	Value string
-}
+var (
+	topicKAFKA           = "kafka-in-out"
+	topicMQTT            = "mqtt-in-out"
+	mqttIncomingMessages = make(chan mqtt.Message)
+)
 
 func main() {
+	// Once the POC is done, we will rewrite all this into nice little packages, structs and fun stuff :D
 	startLogger()
+
+	// Kafka Consumer
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":               "localhost:9092",
-		"group.id":                        "test",
+		"group.id":                        "eevee",
 		"session.timeout.ms":              6000,
 		"go.events.channel.enable":        true,
 		"go.application.rebalance.enable": true,
@@ -33,53 +39,36 @@ func main() {
 		log.Fatalf("Failed to create consumer: %s", err)
 	}
 	defer c.Close()
-
-	topicKAFKA := "kafka-in-out"
-	topicMQTT := "mqtt-in-out"
-	err = c.SubscribeTopics([]string{topicKAFKA, topicMQTT}, nil)
+	err = c.SubscribeTopics([]string{topicKAFKA}, nil)
 	if err != nil {
 		log.Fatal("Could not subsribe to topics:")
 	}
 
+	// Kafka Producer
 	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:9092"})
 	if err != nil {
 		log.Fatalf("Failed to create producer: %s", err)
 	}
 	defer p.Close()
 
+	// MQTT Client
+	mqttOptions := mqtt.NewClientOptions().SetClientID("eevee").AddBroker("tcp://localhost:1883")
+	mClient := mqtt.NewClient(mqttOptions)
+	if token := mClient.Connect(); token.Wait() && token.Error() != nil {
+		log.Fatalf("Failed to connect to MQTT broker: %s", token.Error())
+	}
+	mqttMessageHandler := func(client mqtt.Client, message mqtt.Message) {
+		mqttIncomingMessages <- message
+	}
+	mClient.Subscribe(topicMQTT, byte(0), mqttMessageHandler)
+
+	// Starting the listening process!
 	log.Noticef("Eevee is starting up")
 
 	ctx := context.Background()
 	ctx, cancelCtx := context.WithCancel(ctx)
 	ctxC, cancelCtxC := context.WithCancel(ctx)
 	defer cancelCtxC()
-	ctxP, cancelCtxP := context.WithCancel(ctx)
-	defer cancelCtxP()
-
-	ticker := time.NewTicker(time.Second * 5)
-	go func() {
-		log.Noticef("Producer is starting up")
-		i := 0
-	runP:
-		for {
-			select {
-			case <-ticker.C:
-				// log.Infof("Sending a message...")
-				// p.ProduceChannel() <- &kafka.Message{
-				// 	TopicPartition: kafka.TopicPartition{
-				// 		Topic:     &topic,
-				// 		Partition: kafka.PartitionAny,
-				// 	},
-				// 	Value: []byte("hello!"),
-				// 	Key:   []byte(fmt.Sprintf("Op%d", i)),
-				// }
-			case <-ctxP.Done():
-				log.Noticef("Producer is shutting down")
-				break runP
-			}
-			i++
-		}
-	}()
 
 	processedFromMQTTKeys := make(map[int]bool)
 	processedFromKafkaKeys := make(map[int]bool)
@@ -93,6 +82,20 @@ func main() {
 			case <-ctxC.Done():
 				log.Noticef("Consumer is shutting down")
 				break runC
+			case message := <-mqttIncomingMessages:
+				log.Critical("IN MQTT TOPIC")
+				processed := checkKeyInHashsetInt(processedFromKafkaKeys, int(message.MessageID()))
+				if !processed {
+					key, number := generateKey()
+					log.Info("NUMBER GEN", "number", number)
+					log.Info("KEY OUT", "key", key)
+					addKeyToHashset(processedFromMQTTKeys, number)
+					log.Criticalf("CHECK HASHSET", "here?", processedFromMQTTKeys[number])
+					forwardToKafkaInOut(p, topicKAFKA, message.Payload(), key)
+				} else {
+					log.Noticef("MQTT | value: %s | key: %d ", string(message.Payload()), message.MessageID())
+					removeKeyFromHashsetInt(processedFromKafkaKeys, int(message.MessageID()))
+				}
 			case event := <-c.Events():
 				switch e := event.(type) {
 				case *kafka.Message:
@@ -100,37 +103,17 @@ func main() {
 						log.Criticalf("Topic was nil?")
 						continue
 					}
-					// continue
-					topic := *e.TopicPartition.Topic
-					switch topic {
-					case topicMQTT:
-						log.Critical("IN MQTT TOPIC")
-						processed := checkKeyInHashset(processedFromKafkaKeys, e.Key)
-						if !processed {
-							key, number := generateKey()
-							log.Info("NUMBER GEN", "number", number)
-							log.Info("KEY OUT", "key", key)
-							addKeyToHashset(processedFromMQTTKeys, number)
-							log.Criticalf("CHECK HASHSET", "here?", processedFromMQTTKeys[number])
-							forwardToKafkaInOut(p, topicKAFKA, e.Value, key)
-						} else {
-							log.Noticef("MQTT | value: %s | key: %s ", string(e.Value), string(e.Key))
-							removeKeyFromHashset(processedFromKafkaKeys, e.Key)
-						}
-					case topic:
-						log.Critical("IN KAFKA TOPIC")
-						processed := checkKeyInHashset(processedFromMQTTKeys, e.Key)
-						if !processed {
-							number := rand.Int()
-							key, number := generateKey()
-							log.Info("NUMBER GEN", "number", number)
-							log.Info("KEY OUT", "key", key)
-							addKeyToHashset(processedFromKafkaKeys, number)
-							forwardToKafkaInOut(p, topicMQTT, e.Value, key)
-						} else {
-							log.Noticef("Kafka | value: %s | key: %s ", string(e.Value), string(e.Key))
-							removeKeyFromHashset(processedFromMQTTKeys, e.Key)
-						}
+					log.Critical("IN KAFKA TOPIC")
+					processed := checkKeyInHashset(processedFromMQTTKeys, e.Key)
+					if !processed {
+						token := mClient.Publish(topicMQTT, byte(0), false, e.Value)
+						key := int(token.(*mqtt.PublishToken).MessageID())
+						log.Infof("MESSAGE KEY: %d", key)
+						addKeyToHashset(processedFromKafkaKeys, key)
+					} else {
+						key := int(binary.LittleEndian.Uint16(e.Key))
+						log.Noticef("Kafka | value: %s | key: %d ", string(e.Value), key)
+						removeKeyFromHashset(processedFromMQTTKeys, e.Key)
 					}
 				case kafka.AssignedPartitions:
 					log.Infof("%% %v\n", e)
@@ -168,6 +151,7 @@ func generateKey() (token []byte, number int) {
 	token = make([]byte, 4)
 	rand.Read(token)
 	number = int(binary.LittleEndian.Uint16(token))
+	// should check against the map
 	return token, number
 }
 
@@ -187,6 +171,7 @@ func forwardToKafkaInOut(p *kafka.Producer, topic string, value []byte, key []by
 	}
 }
 
+// get rid of this copy pasta
 func checkKeyInHashset(hashset map[int]bool, key []byte) bool {
 	log.Info("KEY IN", "key", key)
 	log.Info("KEY LENGTH", "key", len(key))
@@ -200,7 +185,18 @@ func checkKeyInHashset(hashset map[int]bool, key []byte) bool {
 	return ok
 }
 
+func checkKeyInHashsetInt(hashset map[int]bool, number int) bool {
+	log.Critical("NUMBER FIND", "number", number)
+	log.Criticalf("HASHSET", "set", hashset)
+	_, ok := hashset[number]
+	return ok
+}
+
 func removeKeyFromHashset(hashset map[int]bool, key []byte) {
 	number := int(binary.LittleEndian.Uint16(key))
+	delete(hashset, number)
+}
+
+func removeKeyFromHashsetInt(hashset map[int]bool, number int) {
 	delete(hashset, number)
 }
