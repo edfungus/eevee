@@ -22,34 +22,31 @@ var (
 	mqttIncomingMessages = make(chan mqtt.Message)
 )
 
+type Payload struct {
+	ID      int
+	Message []byte
+	Topic   string
+}
+
+type Connect interface {
+	In() <-chan Payload
+	Out() chan<- Payload
+}
+
 func main() {
-	// Once the POC is done, we will rewrite all this into nice little packages, structs and fun stuff :D
 	startLogger()
-
-	// Kafka Consumer
-	c, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers":               "localhost:9092",
-		"group.id":                        "eevee",
-		"session.timeout.ms":              6000,
-		"go.events.channel.enable":        true,
-		"go.application.rebalance.enable": true,
-		"default.topic.config":            kafka.ConfigMap{"auto.offset.reset": "earliest"}})
-	// config link: https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-	if err != nil {
-		log.Fatalf("Failed to create consumer: %s", err)
+	kafkaConfig := KafkaConnectConfig{
+		Server:   "localhost:9092",
+		Topics:   []string{topicKAFKA},
+		ClientID: "eevee",
 	}
-	defer c.Close()
-	err = c.SubscribeTopics([]string{topicKAFKA}, nil)
+	kafkaConnect, err := NewKafkaConnect(kafkaConfig)
 	if err != nil {
-		log.Fatal("Could not subsribe to topics:")
+		log.Fatalf("Could not create Kafka Client with err: %s", err.Error())
 	}
-
-	// Kafka Producer
-	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:9092"})
-	if err != nil {
-		log.Fatalf("Failed to create producer: %s", err)
-	}
-	defer p.Close()
+	mqttConnect := NewMqttConnect()
+	bridge := NewBidiBridge(kafkaConnect, mqttConnect)
+	bridge.Start()
 
 	// MQTT Client
 	mqttOptions := mqtt.NewClientOptions().SetClientID("eevee").AddBroker("tcp://localhost:1883")
