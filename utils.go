@@ -10,6 +10,10 @@ func bytes2int(in []byte) (out int) {
 
 func int2bytes(in int) (out []byte) {
 	out = make([]byte, 4)
-	binary.LittleEndian.PutUint16(bs, in)
+	binary.LittleEndian.PutUint16(out, uint16(in))
 	return out
+}
+
+func uint162int(in uint16) (out int) {
+	return int(in)
 }
