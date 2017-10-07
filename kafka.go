@@ -8,27 +8,27 @@ import (
 )
 
 var (
-	ErrKafkaConfigMissingIDComponents = errors.New("Kafka connection config is missing IDStore or IDResolver")
+	ErrKafkaConfigIncomplete = errors.New("Kafka connection config is incomplete")
 )
 
 // KafkaConnectionConfig configures the connection to Kafka and defines what topics are accessed
 type KafkaConnectionConfig struct {
-	Server     string
-	Topics     []string
-	ClientID   string
-	IDResolver IDResolver
-	IDStore    IDStore
+	Server            string
+	Topics            []string
+	ClientID          string
+	RawMessageHandler RawMessageHandler
+	IDStore           IDStore
 }
 
 // KafkaConnection manages and abstracts the connection to Kafka
 type KafkaConnection struct {
-	consumer   *kafka.Consumer
-	producer   *kafka.Producer
-	config     KafkaConnectionConfig
-	in         chan Payload
-	out        chan Payload
-	idResolver IDResolver
-	idStore    IDStore
+	consumer          *kafka.Consumer
+	producer          *kafka.Producer
+	config            KafkaConnectionConfig
+	in                chan Payload
+	out               chan Payload
+	rawMessageHandler RawMessageHandler
+	idStore           IDStore
 }
 
 // NewKafkaConnection returns a new object connected to Kafka with specific topics
@@ -51,8 +51,8 @@ func NewKafkaConnection(config KafkaConnectionConfig) (*KafkaConnection, error) 
 		return nil, err
 	}
 
-	if config.IDResolver == nil || config.IDStore == nil {
-		return nil, ErrKafkaConfigMissingIDComponents
+	if config.RawMessageHandler == nil || config.IDStore == nil {
+		return nil, ErrKafkaConfigIncomplete
 	}
 
 	return &KafkaConnection{
@@ -140,16 +140,15 @@ loop:
 }
 
 func (kc *KafkaConnection) createPayload(e *kafka.Message) Payload {
-	msgID := kc.config.IDResolver.GetID(e.Value)
 	return Payload{
-		ID:      msgID,
-		Message: e.Value,
+		ID:      kc.config.RawMessageHandler.GetID(e.Value),
+		Message: kc.config.RawMessageHandler.GetMessage(e.Value),
 		Topic:   *e.TopicPartition.Topic,
 	}
 }
 
 func (kc *KafkaConnection) createKafkaMessage(payload Payload) *kafka.Message {
-	rawMsg := kc.config.IDResolver.SetID(payload.Message, payload.ID)
+	rawMsg := kc.config.RawMessageHandler.NewRawMessage(payload.ID, payload.Message)
 	return &kafka.Message{
 		TopicPartition: kafka.TopicPartition{
 			Topic:     &payload.Topic,

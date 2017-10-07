@@ -8,27 +8,27 @@ import (
 )
 
 var (
-	ErrMQTTConfigMissingIDComponents = errors.New("MQTT connection config is missing IDStore or IDResolver")
+	ErrMQTTConfigIncomplete = errors.New("MQTT connection config is incomplete")
 )
 
 // MqttConnectionConfig configures the connection to MQTT and defines what topics are accessed
 type MqttConnectionConfig struct {
-	Server     string
-	Topics     []string
-	ClientID   string
-	Qos        byte
-	IDResolver IDResolver
-	IDStore    IDStore
+	Server            string
+	Topics            []string
+	ClientID          string
+	Qos               byte
+	RawMessageHandler RawMessageHandler
+	IDStore           IDStore
 }
 
 // MqttConnection manages and abstracts the connection Kafka
 type MqttConnection struct {
-	client     mqtt.Client
-	config     MqttConnectionConfig
-	in         chan Payload
-	out        chan Payload
-	idResolver IDResolver
-	idStore    IDStore
+	client            mqtt.Client
+	config            MqttConnectionConfig
+	in                chan Payload
+	out               chan Payload
+	rawMessageHandler RawMessageHandler
+	idStore           IDStore
 }
 
 // NewMqttConnection returns a new object connected to MQTT with specific topics
@@ -39,8 +39,8 @@ func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
 		return nil, token.Error()
 	}
 
-	if config.IDResolver == nil || config.IDStore == nil {
-		return nil, ErrMQTTConfigMissingIDComponents
+	if config.RawMessageHandler == nil || config.IDStore == nil {
+		return nil, ErrMQTTConfigIncomplete
 	}
 
 	return &MqttConnection{
@@ -87,7 +87,7 @@ loop:
 			break loop
 		case payload := <-mc.out:
 			log.Debug("MQTT sending message")
-			rawMsg := mc.config.IDResolver.SetID(payload.Message, payload.ID)
+			rawMsg := mc.config.RawMessageHandler.NewRawMessage(payload.ID, payload.Message)
 			mc.client.Publish(payload.Topic, mc.config.Qos, false, rawMsg)
 		}
 	}
@@ -110,10 +110,9 @@ func addQOSToTopics(topics []string, qos byte) map[string]byte {
 }
 
 func (mc *MqttConnection) createPayload(message mqtt.Message) Payload {
-	msgID := mc.config.IDResolver.GetID(message.Payload())
 	return Payload{
-		ID:      msgID,
-		Message: message.Payload(),
+		ID:      mc.config.RawMessageHandler.GetID(message.Payload()),
+		Message: mc.config.RawMessageHandler.GetMessage(message.Payload()),
 		Topic:   message.Topic(),
 	}
 }

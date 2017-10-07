@@ -2,14 +2,15 @@ package main
 
 type Payload struct {
 	ID      int
-	Message []byte
+	Message []byte // maybe make interface{}?
 	Topic   string
 }
 
-// IDResolver handles serializing and deserializing payload to extract message id
-type IDResolver interface {
+// RawMessageHandler handles serializing and deserializing payload to extract message id
+type RawMessageHandler interface {
 	GetID(rawMessage []byte) int
-	SetID(rawMessage []byte, id int) []byte
+	GetMessage(rawMessage []byte) []byte
+	NewRawMessage(id int, message []byte) []byte
 }
 
 // IDStore ensures that message are not duplicated by keeping tracking which messages have been seen
