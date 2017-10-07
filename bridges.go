@@ -32,7 +32,6 @@ loop:
 		case <-ctx.Done():
 			break loop
 		case payload := <-cIn.In():
-			log.Debug("Got something!!")
 			if !cIn.IsDuplicate(payload) {
 				send(cOut, payload)
 			} else {

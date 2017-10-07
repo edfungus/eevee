@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -45,6 +46,7 @@ func (mc *MqttConnection) Start(ctx context.Context) {
 			Message: message.Payload(),
 			Topic:   message.Topic(),
 		}
+		fmt.Printf(">>>>> MESSAGE ID: %d \n", payload.ID)
 		log.Debug("MQTT received message")
 		mc.in <- payload
 	}

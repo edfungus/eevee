@@ -7,6 +7,11 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
+const (
+	minID = 1
+	maxID = 65535
+)
+
 // KafkaConnectConfig configures the connection to Kafka and defines what topics are accessed
 type KafkaConnectionConfig struct {
 	Server   string
@@ -77,18 +82,21 @@ func (kc *KafkaConnection) Out() chan<- Payload {
 }
 
 // In Kafka, we will get messages we send on to a topic we are also subscribing on, so we need to de-duplicate the messages
+// We can come up with better ways for this later
 func (kc *KafkaConnection) GenerateID(payload Payload) Payload {
 	if payload.ID == 0 {
-		payload.ID = rand.Int()
+		payload.ID = rand.Intn(maxID-minID) + minID
 	}
 	return payload
 }
 
 func (kc *KafkaConnection) MarkPayload(payload Payload) {
+	log.Debugf("Kafka marked key: %d", payload.ID)
 	kc.markedPayloads[payload.ID] = true
 }
 
 func (kc *KafkaConnection) UnmarkPayload(payload Payload) {
+	log.Debugf("Kafka unmark key: %d", payload.ID)
 	delete(kc.markedPayloads, payload.ID)
 }
 
@@ -109,7 +117,6 @@ loop:
 			close(kc.in)
 			break loop
 		case event := <-kc.consumer.Events():
-			log.Debug("Something from Kafka....")
 			switch e := event.(type) {
 			case *kafka.Message:
 				if e.TopicPartition.Topic == nil {
@@ -125,6 +132,14 @@ loop:
 				kc.in <- payload
 			case kafka.Error:
 				log.Errorf("Kafka error: %v", e)
+			case kafka.AssignedPartitions:
+				log.Infof("Kafka parition: %v", e)
+				kc.consumer.Assign(e.Partitions)
+			case kafka.RevokedPartitions:
+				log.Infof("Kafka parition: %v", e)
+				kc.consumer.Unassign()
+			case kafka.PartitionEOF:
+				// log.Infof("Kafka parition: %v", e)
 			}
 		}
 	}

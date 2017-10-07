@@ -5,6 +5,9 @@ import (
 )
 
 func bytes2int(in []byte) (out int) {
+	if in == nil || len(in) == 0 {
+		return 0
+	}
 	return int(binary.LittleEndian.Uint16(in))
 }
 
