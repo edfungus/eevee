@@ -16,20 +16,11 @@ var (
 	topics = []string{"topic1", "topic2"}
 )
 
-type Payload struct {
-	ID      int
-	Message []byte
-	Topic   string
-}
-
 type Connection interface {
 	Start(ctx context.Context)
 	In() <-chan Payload
 	Out() chan<- Payload
-	GenerateID(payload Payload) Payload
-	MarkPayload(payload Payload)
-	UnmarkPayload(payload Payload)
-	IsDuplicate(paylaod Payload) bool
+	IDStore() IDStore
 }
 
 func main() {

@@ -2,34 +2,36 @@ package main
 
 import (
 	"context"
-	"math/rand"
+	"errors"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-const (
-	minID = 1
-	maxID = 65535
+var (
+	ErrKafkaConfigMissingIDComponents = errors.New("Kafka connection config is missing IDStore or IDResolver")
 )
 
-// KafkaConnectConfig configures the connection to Kafka and defines what topics are accessed
+// KafkaConnectionConfig configures the connection to Kafka and defines what topics are accessed
 type KafkaConnectionConfig struct {
-	Server   string
-	Topics   []string
-	ClientID string
+	Server     string
+	Topics     []string
+	ClientID   string
+	IDResolver IDResolver
+	IDStore    IDStore
 }
 
-// KafkaConnect manages and abstracts the connection to Kafka
+// KafkaConnection manages and abstracts the connection to Kafka
 type KafkaConnection struct {
-	consumer       *kafka.Consumer
-	producer       *kafka.Producer
-	config         KafkaConnectionConfig
-	in             chan Payload
-	out            chan Payload
-	markedPayloads map[int]bool
+	consumer   *kafka.Consumer
+	producer   *kafka.Producer
+	config     KafkaConnectionConfig
+	in         chan Payload
+	out        chan Payload
+	idResolver IDResolver
+	idStore    IDStore
 }
 
-// NewKafkaConnect returns a new object connected to Kafka with specific topics
+// NewKafkaConnection returns a new object connected to Kafka with specific topics
 func NewKafkaConnection(config KafkaConnectionConfig) (*KafkaConnection, error) {
 	// config link: https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
 	c, err := kafka.NewConsumer(&kafka.ConfigMap{
@@ -49,13 +51,16 @@ func NewKafkaConnection(config KafkaConnectionConfig) (*KafkaConnection, error) 
 		return nil, err
 	}
 
+	if config.IDResolver == nil || config.IDStore == nil {
+		return nil, ErrKafkaConfigMissingIDComponents
+	}
+
 	return &KafkaConnection{
-		consumer:       c,
-		producer:       p,
-		config:         config,
-		in:             make(chan Payload),
-		out:            make(chan Payload),
-		markedPayloads: make(map[int]bool),
+		consumer: c,
+		producer: p,
+		config:   config,
+		in:       make(chan Payload),
+		out:      make(chan Payload),
 	}, nil
 }
 
@@ -81,30 +86,8 @@ func (kc *KafkaConnection) Out() chan<- Payload {
 	return kc.out
 }
 
-// In Kafka, we will get messages we send on to a topic we are also subscribing on, so we need to de-duplicate the messages
-// We can come up with better ways for this later
-func (kc *KafkaConnection) GenerateID(payload Payload) Payload {
-	if payload.ID == 0 {
-		payload.ID = rand.Intn(maxID-minID) + minID
-	}
-	return payload
-}
-
-func (kc *KafkaConnection) MarkPayload(payload Payload) {
-	log.Debugf("Kafka marked key: %d", payload.ID)
-	kc.markedPayloads[payload.ID] = true
-}
-
-func (kc *KafkaConnection) UnmarkPayload(payload Payload) {
-	log.Debugf("Kafka unmark key: %d", payload.ID)
-	delete(kc.markedPayloads, payload.ID)
-}
-
-func (kc *KafkaConnection) IsDuplicate(payload Payload) bool {
-	if kc.markedPayloads[payload.ID] {
-		log.Debug("Kafka got duplicate message")
-	}
-	return kc.markedPayloads[payload.ID]
+func (kc *KafkaConnection) IDStore() IDStore {
+	return kc.config.IDStore
 }
 
 func (kc *KafkaConnection) receiveMessages(ctx context.Context) {
@@ -124,12 +107,7 @@ loop:
 					continue
 				}
 				log.Debug("Kafka received message")
-				payload := Payload{
-					ID:      bytes2int(e.Key),
-					Message: e.Value,
-					Topic:   *e.TopicPartition.Topic,
-				}
-				kc.in <- payload
+				kc.in <- kc.createPayload(e)
 			case kafka.Error:
 				log.Errorf("Kafka error: %v", e)
 			case kafka.AssignedPartitions:
@@ -156,14 +134,27 @@ loop:
 			break loop
 		case payload := <-kc.out:
 			log.Debug("Kafka sending message")
-			kc.producer.ProduceChannel() <- &kafka.Message{
-				TopicPartition: kafka.TopicPartition{
-					Topic:     &payload.Topic,
-					Partition: kafka.PartitionAny,
-				},
-				Value: payload.Message,
-				Key:   int2bytes(payload.ID),
-			}
+			kc.producer.ProduceChannel() <- kc.createKafkaMessage(payload)
 		}
+	}
+}
+
+func (kc *KafkaConnection) createPayload(e *kafka.Message) Payload {
+	msgID := kc.config.IDResolver.GetID(e.Value)
+	return Payload{
+		ID:      msgID,
+		Message: e.Value,
+		Topic:   *e.TopicPartition.Topic,
+	}
+}
+
+func (kc *KafkaConnection) createKafkaMessage(payload Payload) *kafka.Message {
+	rawMsg := kc.config.IDResolver.SetID(payload.Message, payload.ID)
+	return &kafka.Message{
+		TopicPartition: kafka.TopicPartition{
+			Topic:     &payload.Topic,
+			Partition: kafka.PartitionAny,
+		},
+		Value: rawMsg,
 	}
 }

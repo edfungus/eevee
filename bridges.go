@@ -32,17 +32,17 @@ loop:
 		case <-ctx.Done():
 			break loop
 		case payload := <-cIn.In():
-			if !cIn.IsDuplicate(payload) {
+			if !cIn.IDStore().IsDuplicate(payload.ID) {
 				send(cOut, payload)
 			} else {
-				cIn.UnmarkPayload(payload)
+				cIn.IDStore().UnmarkID(payload.ID)
 			}
 		}
 	}
 }
 
 func send(c Connection, p Payload) {
-	p = c.GenerateID(p)
-	c.MarkPayload(p)
+	p.ID = c.IDStore().GenerateID(p)
+	c.IDStore().MarkID(p.ID)
 	c.Out() <- p
 }

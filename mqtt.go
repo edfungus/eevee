@@ -2,34 +2,47 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-// MqttConnectConfig configures the connection to MQTT and defines what topics are accessed
+var (
+	ErrMQTTConfigMissingIDComponents = errors.New("MQTT connection config is missing IDStore or IDResolver")
+)
+
+// MqttConnectionConfig configures the connection to MQTT and defines what topics are accessed
 type MqttConnectionConfig struct {
-	Server   string
-	Topics   []string
-	ClientID string
-	Qos      byte
+	Server     string
+	Topics     []string
+	ClientID   string
+	Qos        byte
+	IDResolver IDResolver
+	IDStore    IDStore
 }
 
-// MqttConnect manages and abstracts the connection Kafka
+// MqttConnection manages and abstracts the connection Kafka
 type MqttConnection struct {
-	client mqtt.Client
-	config MqttConnectionConfig
-	in     chan Payload
-	out    chan Payload
+	client     mqtt.Client
+	config     MqttConnectionConfig
+	in         chan Payload
+	out        chan Payload
+	idResolver IDResolver
+	idStore    IDStore
 }
 
-// NewMqttConnect returns a new object connected to MQTT with specific topics
+// NewMqttConnection returns a new object connected to MQTT with specific topics
 func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
 	options := mqtt.NewClientOptions().SetClientID(config.ClientID).AddBroker(config.Server)
 	client := mqtt.NewClient(options)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		return nil, token.Error()
 	}
+
+	if config.IDResolver == nil || config.IDStore == nil {
+		return nil, ErrMQTTConfigMissingIDComponents
+	}
+
 	return &MqttConnection{
 		client: client,
 		config: config,
@@ -41,14 +54,8 @@ func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
 // Start begins sending and receiving MQTT messages. The context is used to stop the MQTT client
 func (mc *MqttConnection) Start(ctx context.Context) {
 	receiveMessages := func(client mqtt.Client, message mqtt.Message) {
-		payload := Payload{
-			ID:      uint162int(message.MessageID()),
-			Message: message.Payload(),
-			Topic:   message.Topic(),
-		}
-		fmt.Printf(">>>>> MESSAGE ID: %d \n", payload.ID)
 		log.Debug("MQTT received message")
-		mc.in <- payload
+		mc.in <- mc.createPayload(message)
 	}
 	topics := addQOSToTopics(mc.config.Topics, mc.config.Qos)
 	mc.client.SubscribeMultiple(topics, receiveMessages)
@@ -68,21 +75,8 @@ func (mc *MqttConnection) Out() chan<- Payload {
 	return mc.out
 }
 
-// Because MQTT brokers will not send a message back to the message sender (even on same topic), we do not have to manually de-dulicate messages
-func (mc *MqttConnection) GenerateID(payload Payload) Payload {
-	return payload
-}
-
-func (mc *MqttConnection) MarkPayload(payload Payload) {
-	return
-}
-
-func (mc *MqttConnection) UnmarkPayload(payload Payload) {
-	return
-}
-
-func (mc *MqttConnection) IsDuplicate(payload Payload) bool {
-	return false
+func (mc *MqttConnection) IDStore() IDStore {
+	return mc.config.IDStore
 }
 
 func (mc *MqttConnection) sendMessages(ctx context.Context) {
@@ -93,7 +87,8 @@ loop:
 			break loop
 		case payload := <-mc.out:
 			log.Debug("MQTT sending message")
-			mc.client.Publish(payload.Topic, mc.config.Qos, false, payload.Message)
+			rawMsg := mc.config.IDResolver.SetID(payload.Message, payload.ID)
+			mc.client.Publish(payload.Topic, mc.config.Qos, false, rawMsg)
 		}
 	}
 }
@@ -112,4 +107,13 @@ func addQOSToTopics(topics []string, qos byte) map[string]byte {
 		m[topic] = qos
 	}
 	return m
+}
+
+func (mc *MqttConnection) createPayload(message mqtt.Message) Payload {
+	msgID := mc.config.IDResolver.GetID(message.Payload())
+	return Payload{
+		ID:      msgID,
+		Message: message.Payload(),
+		Topic:   message.Topic(),
+	}
 }
