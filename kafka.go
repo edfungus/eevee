@@ -1,34 +1,25 @@
-package main
+package eevee
 
 import (
 	"context"
-	"errors"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-var (
-	ErrKafkaConfigIncomplete = errors.New("Kafka connection config is incomplete")
-)
-
 // KafkaConnectionConfig configures the connection to Kafka and defines what topics are accessed
 type KafkaConnectionConfig struct {
-	Server            string
-	Topics            []string
-	ClientID          string
-	RawMessageHandler RawMessageHandler
-	IDStore           IDStore
+	Server   string
+	Topics   []string
+	ClientID string
 }
 
 // KafkaConnection manages and abstracts the connection to Kafka
 type KafkaConnection struct {
-	consumer          *kafka.Consumer
-	producer          *kafka.Producer
-	config            KafkaConnectionConfig
-	in                chan Payload
-	out               chan Payload
-	rawMessageHandler RawMessageHandler
-	idStore           IDStore
+	consumer *kafka.Consumer
+	producer *kafka.Producer
+	config   KafkaConnectionConfig
+	in       chan Payload
+	out      chan Payload
 }
 
 // NewKafkaConnection returns a new object connected to Kafka with specific topics
@@ -49,10 +40,6 @@ func NewKafkaConnection(config KafkaConnectionConfig) (*KafkaConnection, error) 
 	if err != nil {
 		log.Fatalf("Kafka failed to create producer: %s", err)
 		return nil, err
-	}
-
-	if config.RawMessageHandler == nil || config.IDStore == nil {
-		return nil, ErrKafkaConfigIncomplete
 	}
 
 	return &KafkaConnection{
@@ -86,10 +73,6 @@ func (kc *KafkaConnection) Out() chan<- Payload {
 	return kc.out
 }
 
-func (kc *KafkaConnection) IDStore() IDStore {
-	return kc.config.IDStore
-}
-
 func (kc *KafkaConnection) receiveMessages(ctx context.Context) {
 loop:
 	for {
@@ -107,7 +90,7 @@ loop:
 					continue
 				}
 				log.Debug("Kafka received message")
-				kc.in <- kc.createPayload(e)
+				kc.in <- NewPayload(e.Value, *e.TopicPartition.Topic)
 			case kafka.Error:
 				log.Errorf("Kafka error: %v", e)
 			case kafka.AssignedPartitions:
@@ -139,21 +122,12 @@ loop:
 	}
 }
 
-func (kc *KafkaConnection) createPayload(e *kafka.Message) Payload {
-	return Payload{
-		ID:      kc.config.RawMessageHandler.GetID(e.Value),
-		Message: kc.config.RawMessageHandler.GetMessage(e.Value),
-		Topic:   *e.TopicPartition.Topic,
-	}
-}
-
 func (kc *KafkaConnection) createKafkaMessage(payload Payload) *kafka.Message {
-	rawMsg := kc.config.RawMessageHandler.NewRawMessage(payload.ID, payload.Message)
 	return &kafka.Message{
 		TopicPartition: kafka.TopicPartition{
 			Topic:     &payload.Topic,
 			Partition: kafka.PartitionAny,
 		},
-		Value: rawMsg,
+		Value: payload.RawMessage,
 	}
 }

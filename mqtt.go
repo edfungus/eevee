@@ -1,34 +1,25 @@
-package main
+package eevee
 
 import (
 	"context"
-	"errors"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-var (
-	ErrMQTTConfigIncomplete = errors.New("MQTT connection config is incomplete")
-)
-
 // MqttConnectionConfig configures the connection to MQTT and defines what topics are accessed
 type MqttConnectionConfig struct {
-	Server            string
-	Topics            []string
-	ClientID          string
-	Qos               byte
-	RawMessageHandler RawMessageHandler
-	IDStore           IDStore
+	Server   string
+	Topics   []string
+	ClientID string
+	Qos      byte
 }
 
 // MqttConnection manages and abstracts the connection Kafka
 type MqttConnection struct {
-	client            mqtt.Client
-	config            MqttConnectionConfig
-	in                chan Payload
-	out               chan Payload
-	rawMessageHandler RawMessageHandler
-	idStore           IDStore
+	client mqtt.Client
+	config MqttConnectionConfig
+	in     chan Payload
+	out    chan Payload
 }
 
 // NewMqttConnection returns a new object connected to MQTT with specific topics
@@ -37,10 +28,6 @@ func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
 	client := mqtt.NewClient(options)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		return nil, token.Error()
-	}
-
-	if config.RawMessageHandler == nil || config.IDStore == nil {
-		return nil, ErrMQTTConfigIncomplete
 	}
 
 	return &MqttConnection{
@@ -55,7 +42,7 @@ func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
 func (mc *MqttConnection) Start(ctx context.Context) {
 	receiveMessages := func(client mqtt.Client, message mqtt.Message) {
 		log.Debug("MQTT received message")
-		mc.in <- mc.createPayload(message)
+		mc.in <- NewPayload(message.Payload(), message.Topic())
 	}
 	topics := addQOSToTopics(mc.config.Topics, mc.config.Qos)
 	mc.client.SubscribeMultiple(topics, receiveMessages)
@@ -75,10 +62,6 @@ func (mc *MqttConnection) Out() chan<- Payload {
 	return mc.out
 }
 
-func (mc *MqttConnection) IDStore() IDStore {
-	return mc.config.IDStore
-}
-
 func (mc *MqttConnection) sendMessages(ctx context.Context) {
 loop:
 	for {
@@ -87,8 +70,7 @@ loop:
 			break loop
 		case payload := <-mc.out:
 			log.Debug("MQTT sending message")
-			rawMsg := mc.config.RawMessageHandler.NewRawMessage(payload.ID, payload.Message)
-			mc.client.Publish(payload.Topic, mc.config.Qos, false, rawMsg)
+			mc.client.Publish(payload.Topic, mc.config.Qos, false, payload.RawMessage)
 		}
 	}
 }
@@ -107,12 +89,4 @@ func addQOSToTopics(topics []string, qos byte) map[string]byte {
 		m[topic] = qos
 	}
 	return m
-}
-
-func (mc *MqttConnection) createPayload(message mqtt.Message) Payload {
-	return Payload{
-		ID:      mc.config.RawMessageHandler.GetID(message.Payload()),
-		Message: mc.config.RawMessageHandler.GetMessage(message.Payload()),
-		Topic:   message.Topic(),
-	}
 }
