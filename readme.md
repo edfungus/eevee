@@ -2,7 +2,7 @@
 
 #### What?
 
-Eevee is a bridge between Kafka and MQTT. This great if you want you IOT devices to also be connected to your firehose of application logs and communication. This is especially awesome now that your IOT sensors can directly interact with your applications. 
+Eevee is a bridge between anything you want like Kafka and MQTT. This great if you want you IOT devices to also be connected to your firehose of application logs and communication. This is especially awesome now that your IOT sensors can directly interact with your applications. 
 
 #### How does it work?
 
@@ -14,6 +14,8 @@ A simple example has been written under the examples directory. To use, Kafka an
 
 #### Todo
 * Tests plz
+* Error channel?
+* Unidirectional bridge?
 * A better key store?
 * Worker?
 * New source/sink?

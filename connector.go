@@ -1,10 +1,6 @@
 package eevee
 
-// MessageID is how duplicate messages are identified.
-//
-// Notes:
-// Usually the type should be same between Connectors but if they are different, the Translator and IDStore must be able to handle the translation and storage differences.
-type MessageID interface{}
+import "context"
 
 //Connector contains all the information for this connection to interact with another connector.
 //
@@ -17,8 +13,12 @@ type Connector struct {
 	IDStore    IDStore
 }
 
-// NoMessageID is use to signal that there is no message id set in message
-var NoMessageID = 0
+// Connection contains the actual connection made to the sink/source
+type Connection interface {
+	Start(ctx context.Context)
+	In() <-chan Payload
+	Out() chan<- Payload
+}
 
 // Translator translates a raw message to the other connector's raw message
 //
@@ -38,6 +38,15 @@ type IDStore interface {
 	UnmarkID(id MessageID)
 	IsDuplicate(id MessageID) bool
 }
+
+// MessageID is how duplicate messages are identified.
+//
+// Notes:
+// Usually the type should be same between Connectors but if they are different, the Translator and IDStore must be able to handle the translation and storage differences.
+type MessageID interface{}
+
+// NoMessageID is use to signal that there is no message id set in message
+var NoMessageID = 0
 
 // NewConnector returns a new connection object to a sink/source
 func NewConnector(connection Connection, translator Translator, idStore IDStore) *Connector {
