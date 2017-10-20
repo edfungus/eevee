@@ -27,6 +27,29 @@ func (bb *BidiBridge) Start(ctx context.Context) {
 	log.Info("BidiBridge has started")
 }
 
+// UniBridge is a uni-directional bridge from one connection to another connection
+type UniBridge struct {
+	in  *Connector
+	out *Connector
+}
+
+// NewUniBridge returns an object that sends messages from in to out
+func NewUniBridge(in *Connector, out *Connector) *UniBridge {
+	return &UniBridge{
+		in:  in,
+		out: out,
+	}
+}
+
+// Start begins the messsage transmission
+func (ub *UniBridge) Start(ctx context.Context) {
+	go route(ctx, ub.in, ub.out)
+	go dumpIncoming(ctx, ub.out)
+	ub.in.Connection.Start(ctx)
+	ub.out.Connection.Start(ctx)
+	log.Info("UniBridge has started")
+}
+
 func route(ctx context.Context, cIn *Connector, cOut *Connector) {
 loop:
 	for {
@@ -55,6 +78,18 @@ loop:
 			} else {
 				cIn.IDStore.UnmarkID(id)
 			}
+		}
+	}
+}
+
+func dumpIncoming(ctx context.Context, c *Connector) {
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case <-c.Connection.In():
+			// read channel but do nothing
 		}
 	}
 }

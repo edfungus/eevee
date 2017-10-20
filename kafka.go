@@ -55,7 +55,7 @@ func NewKafkaConnection(config KafkaConnectionConfig) (*KafkaConnection, error) 
 func (kc *KafkaConnection) Start(ctx context.Context) {
 	err := kc.consumer.SubscribeTopics(kc.config.Topics, nil)
 	if err != nil {
-		log.Fatal("Kakfa could not subsribe to topics")
+		log.Fatal("Kakfa could not subscribe to topics")
 	}
 
 	go kc.receiveMessages(ctx)
