@@ -12,6 +12,8 @@ type MqttConnectionConfig struct {
 	Topics   []string
 	ClientID string
 	Qos      byte
+	Username string
+	Password string
 }
 
 // MqttConnection manages and abstracts the connection Kafka
@@ -24,7 +26,7 @@ type MqttConnection struct {
 
 // NewMqttConnection returns a new object connected to MQTT with specific topics
 func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
-	options := mqtt.NewClientOptions().SetClientID(config.ClientID).AddBroker(config.Server)
+	options := mqtt.NewClientOptions().SetClientID(config.ClientID).AddBroker(config.Server).SetUsername(config.Username).SetPassword(config.Password)
 	client := mqtt.NewClient(options)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		return nil, token.Error()
