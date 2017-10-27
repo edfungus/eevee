@@ -33,8 +33,9 @@ func main() {
 				Method: http.MethodPost,
 			},
 		},
-		Port:   "8080",
-		Router: nil,
+		Port:    "8080",
+		Router:  nil,
+		Wrapper: basicAuthWrapper,
 	}
 	restConnection, err := eevee.NewRestConnection(restConfig)
 	if err != nil {
@@ -82,4 +83,20 @@ func main() {
 	cancel()
 	time.Sleep(time.Second * 1)
 	log.Noticef("Eevee says goodbye")
+}
+
+func basicAuthWrapper(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if u == "user" && p == "password" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	})
 }

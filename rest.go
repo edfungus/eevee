@@ -15,13 +15,14 @@ type RestRoute struct {
 }
 
 type RestConnectionConfig struct {
-	Topics map[string]RestRoute
-	Port   string
-	Router *mux.Router
+	Topics  map[string]RestRoute
+	Port    string
+	Router  *mux.Router
+	Wrapper func(http.Handler) http.Handler
 }
 
 type RestConnection struct {
-	Router *mux.Router
+	router *mux.Router
 	config RestConnectionConfig
 	server *http.Server
 	in     chan Payload
@@ -29,15 +30,20 @@ type RestConnection struct {
 }
 
 func NewRestConnection(config RestConnectionConfig) (*RestConnection, error) {
-	if config.Router == nil {
-		config.Router = mux.NewRouter()
+	var router *mux.Router
+	if config.Router != nil {
+		router = config.Router
+	} else {
+		router = mux.NewRouter()
 	}
+	handler := createHandler(config.Wrapper, router)
+
 	return &RestConnection{
-		Router: config.Router,
+		router: router,
 		config: config,
 		server: &http.Server{
 			Addr:    ":" + config.Port,
-			Handler: config.Router,
+			Handler: handler,
 		},
 		in:  make(chan Payload),
 		out: make(chan Payload),
@@ -46,7 +52,7 @@ func NewRestConnection(config RestConnectionConfig) (*RestConnection, error) {
 
 func (rc *RestConnection) Start(ctx context.Context) {
 	for topic, route := range rc.config.Topics {
-		rc.Router.Handle(route.Path, rc.requestHandler(topic)).Methods(route.Method)
+		rc.router.Handle(route.Path, rc.requestHandler(topic)).Methods(route.Method)
 	}
 	go rc.server.ListenAndServe()
 	go rc.waitToStopServer(ctx)
@@ -77,4 +83,13 @@ func (rc *RestConnection) waitToStopServer(ctx context.Context) {
 	defer cancelCtx()
 	log.Info("Stopping REST Client")
 	rc.server.Shutdown(timeoutCtx)
+}
+
+func createHandler(wrapper func(http.Handler) http.Handler, router *mux.Router) (handler http.Handler) {
+	if wrapper != nil {
+		handler = wrapper(router)
+	} else {
+		handler = router
+	}
+	return handler
 }
