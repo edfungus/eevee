@@ -15,11 +15,12 @@ type KafkaConnectionConfig struct {
 
 // KafkaConnection manages and abstracts the connection to Kafka
 type KafkaConnection struct {
-	consumer *kafka.Consumer
-	producer *kafka.Producer
-	config   KafkaConnectionConfig
-	in       chan Payload
-	out      chan Payload
+	consumer    *kafka.Consumer
+	producer    *kafka.Producer
+	config      KafkaConnectionConfig
+	in          chan Payload
+	out         chan Payload
+	routeStatus chan RouteStatus
 }
 
 // NewKafkaConnection returns a new object connected to Kafka with specific topics
@@ -43,11 +44,12 @@ func NewKafkaConnection(config KafkaConnectionConfig) (*KafkaConnection, error) 
 	}
 
 	return &KafkaConnection{
-		consumer: c,
-		producer: p,
-		config:   config,
-		in:       make(chan Payload),
-		out:      make(chan Payload),
+		consumer:    c,
+		producer:    p,
+		config:      config,
+		in:          make(chan Payload),
+		out:         make(chan Payload),
+		routeStatus: make(chan RouteStatus),
 	}, nil
 }
 
@@ -60,6 +62,7 @@ func (kc *KafkaConnection) Start(ctx context.Context) {
 
 	go kc.receiveMessages(ctx)
 	go kc.sendMessages(ctx)
+	go kc.ignoreRouteStatus(ctx)
 	log.Info("Kafka client has started")
 }
 
@@ -71,6 +74,11 @@ func (kc *KafkaConnection) In() <-chan Payload {
 // Out sends messages out to Kafka
 func (kc *KafkaConnection) Out() chan<- Payload {
 	return kc.out
+}
+
+// Errors from eevee
+func (kc *KafkaConnection) RouteStatus() chan<- RouteStatus {
+	return kc.routeStatus
 }
 
 func (kc *KafkaConnection) receiveMessages(ctx context.Context) {
@@ -129,5 +137,16 @@ func (kc *KafkaConnection) createKafkaMessage(payload Payload) *kafka.Message {
 			Partition: kafka.PartitionAny,
 		},
 		Value: payload.RawMessage,
+	}
+}
+
+func (kc *KafkaConnection) ignoreRouteStatus(ctx context.Context) {
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case <-kc.routeStatus:
+		}
 	}
 }

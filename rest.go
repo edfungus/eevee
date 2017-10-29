@@ -22,11 +22,12 @@ type RestConnectionConfig struct {
 }
 
 type RestConnection struct {
-	router *mux.Router
-	config RestConnectionConfig
-	server *http.Server
-	in     chan Payload
-	out    chan Payload
+	router      *mux.Router
+	config      RestConnectionConfig
+	server      *http.Server
+	in          chan Payload
+	out         chan Payload
+	routeStatus chan RouteStatus
 }
 
 func NewRestConnection(config RestConnectionConfig) (*RestConnection, error) {
@@ -45,8 +46,9 @@ func NewRestConnection(config RestConnectionConfig) (*RestConnection, error) {
 			Addr:    ":" + config.Port,
 			Handler: handler,
 		},
-		in:  make(chan Payload),
-		out: make(chan Payload),
+		in:          make(chan Payload),
+		out:         make(chan Payload),
+		routeStatus: make(chan RouteStatus),
 	}, nil
 }
 
@@ -66,14 +68,24 @@ func (rc *RestConnection) Out() chan<- Payload {
 	return rc.out
 }
 
+func (rc *RestConnection) RouteStatus() chan<- RouteStatus {
+	return rc.routeStatus
+}
+
 func (rc *RestConnection) requestHandler(topic string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Debug("REST received message")
-		defer w.WriteHeader(http.StatusOK)
 		defer r.Body.Close()
 		msg := new(bytes.Buffer)
 		msg.ReadFrom(r.Body)
 		rc.in <- NewPayload(msg.Bytes(), topic)
+		status := <-rc.routeStatus
+		if status.Code == RouteOK {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(status.Message))
+		}
 	})
 }
 

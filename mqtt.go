@@ -18,10 +18,11 @@ type MqttConnectionConfig struct {
 
 // MqttConnection manages and abstracts the connection Kafka
 type MqttConnection struct {
-	client mqtt.Client
-	config MqttConnectionConfig
-	in     chan Payload
-	out    chan Payload
+	client      mqtt.Client
+	config      MqttConnectionConfig
+	in          chan Payload
+	out         chan Payload
+	routeStatus chan RouteStatus
 }
 
 // NewMqttConnection returns a new object connected to MQTT with specific topics
@@ -33,10 +34,11 @@ func NewMqttConnection(config MqttConnectionConfig) (*MqttConnection, error) {
 	}
 
 	return &MqttConnection{
-		client: client,
-		config: config,
-		in:     make(chan Payload),
-		out:    make(chan Payload),
+		client:      client,
+		config:      config,
+		in:          make(chan Payload),
+		out:         make(chan Payload),
+		routeStatus: make(chan RouteStatus),
 	}, nil
 }
 
@@ -51,6 +53,7 @@ func (mc *MqttConnection) Start(ctx context.Context) {
 
 	go mc.stop(ctx)
 	go mc.sendMessages(ctx)
+	go mc.ignoreRouteStatus(ctx)
 	log.Info("MQTT client has started")
 }
 
@@ -62,6 +65,11 @@ func (mc *MqttConnection) In() <-chan Payload {
 // Out sends messages out to MQTT
 func (mc *MqttConnection) Out() chan<- Payload {
 	return mc.out
+}
+
+// Errors from eevee
+func (mc *MqttConnection) RouteStatus() chan<- RouteStatus {
+	return mc.routeStatus
 }
 
 func (mc *MqttConnection) sendMessages(ctx context.Context) {
@@ -91,4 +99,15 @@ func addQOSToTopics(topics []string, qos byte) map[string]byte {
 		m[topic] = qos
 	}
 	return m
+}
+
+func (mc *MqttConnection) ignoreRouteStatus(ctx context.Context) {
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case <-mc.routeStatus:
+		}
+	}
 }

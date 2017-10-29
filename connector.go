@@ -18,6 +18,7 @@ type Connection interface {
 	Start(ctx context.Context)
 	In() <-chan Payload
 	Out() chan<- Payload
+	RouteStatus() chan<- RouteStatus
 }
 
 // Translator translates a raw message to the other connector's raw message

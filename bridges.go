@@ -59,7 +59,12 @@ loop:
 		case inPayload := <-cIn.Connection.In():
 			id, err := cIn.Translator.GetID(inPayload.RawMessage)
 			if err != nil {
-				log.Debug("Message receive but could not get id. Skipping")
+				msg := "Message receive but could not get id. Skipping"
+				log.Debug(msg)
+				cIn.Connection.RouteStatus() <- RouteStatus{
+					Code:    RouteFailed,
+					Message: msg,
+				}
 				continue
 			}
 			if !cIn.IDStore.IsDuplicate(id) {
@@ -68,13 +73,21 @@ loop:
 					id = cOut.IDStore.GenerateID()
 					outRawMessage, err = cOut.Translator.SetID(outRawMessage, id)
 					if err != nil {
-						log.Debug("Could not set id in outgoing payload")
+						msg := "Could not set id in outgoing payload"
+						log.Debug()
+						cIn.Connection.RouteStatus() <- RouteStatus{
+							Code:    RouteFailed,
+							Message: msg,
+						}
 						continue
 					}
 				}
 				cOut.IDStore.MarkID(id)
 				outPayload := NewPayload(outRawMessage, inPayload.Topic)
 				cOut.Connection.Out() <- outPayload
+				cIn.Connection.RouteStatus() <- RouteStatus{
+					Code: RouteOK,
+				}
 			} else {
 				cIn.IDStore.UnmarkID(id)
 			}
